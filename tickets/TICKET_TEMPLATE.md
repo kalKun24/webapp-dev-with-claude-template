@@ -11,7 +11,7 @@
 | 完了日 | YYYY-MM-DD |
 | ブランチ名 | `feature/xxxx` |
 | PR番号 | #xx |
-| PRリンク | https://github.com/kalKun24/cert-study-base/pull/xx |
+| PRリンク | （PR作成後に記入） |
 
 ---
 
