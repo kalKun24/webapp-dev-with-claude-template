@@ -19,6 +19,7 @@ Claude Code を使った Web アプリケーション開発をすぐに始めら
 | ファイル | 役割 | 呼び出しタイミング |
 |---|---|---|
 | `project-setup.md` | clone 後の初期設定（CLAUDE.md のプレースホルダを埋める） | セットアップ時 |
+| `dev-team.md` | チケット実装のオーケストレーター（Backend・Frontend を並列実装 → レビュー） | チケット着手時 |
 | `engineering-backend-architect.md` | Go バックエンド設計・データベース・クラウドインフラ | バックエンド実装時 |
 | `engineering-frontend-developer.md` | React / TypeScript フロントエンド実装 | フロントエンド実装時 |
 | `engineering-code-reviewer.md` | コードレビュー（正確性・セキュリティ・保守性・パフォーマンス） | PR レビュー時 |
@@ -121,7 +122,7 @@ tools:
 ---
 ```
 
-既存の 4 つのエージェント定義を参考にしてください。
+既存の 6 つのエージェント定義を参考にしてください。
 
 ---
 
@@ -132,6 +133,7 @@ tools:
 ├── .claude/
 │   └── agents/                  # サブエージェント定義
 │       ├── project-setup.md             # 初期セットアップ
+│       ├── dev-team.md                  # チケット実装オーケストレーター
 │       ├── engineering-backend-architect.md
 │       ├── engineering-code-reviewer.md
 │       ├── engineering-frontend-developer.md
