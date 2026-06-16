@@ -119,57 +119,98 @@ When reviewing any system, always ask:
 ```
 
 ### Secure Code Review Pattern
-```python
-# Example: Secure API endpoint with authentication, validation, and rate limiting
+```go
+// Example: Secure API endpoint in Go with authentication, validation, and rate limiting
 
-from fastapi import FastAPI, Depends, HTTPException, status, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, field_validator
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-import re
+package handler
 
-app = FastAPI(docs_url=None, redoc_url=None)  # Disable docs in production
-security = HTTPBearer()
-limiter = Limiter(key_func=get_remote_address)
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"regexp"
+	"strings"
 
-class UserInput(BaseModel):
-    """Strict input validation — reject anything unexpected."""
-    username: str = Field(..., min_length=3, max_length=30)
-    email: str = Field(..., max_length=254)
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/time/rate"
+)
 
-    @field_validator("username")
-    @classmethod
-    def validate_username(cls, v: str) -> str:
-        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
-            raise ValueError("Username contains invalid characters")
-        return v
+var (
+	usernameRe  = regexp.MustCompile(`^[a-zA-Z0-9_-]{3,30}$`)
+	loginLimiter = rate.NewLimiter(rate.Every(time.Minute/10), 3) // 10 req/min, burst 3
+)
 
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Validate JWT — signature, expiry, issuer, audience. Never allow alg=none."""
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            key=settings.JWT_PUBLIC_KEY,
-            algorithms=["RS256"],
-            audience=settings.JWT_AUDIENCE,
-            issuer=settings.JWT_ISSUER,
-        )
-        return payload
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+type createUserRequest struct {
+	Username string `json:"username"`
+	Email    string `json:"email"`
+}
 
-@app.post("/api/users", status_code=status.HTTP_201_CREATED)
-@limiter.limit("10/minute")
-async def create_user(request: Request, user: UserInput, auth: dict = Depends(verify_token)):
-    # 1. Auth handled by dependency injection — fails before handler runs
-    # 2. Input validated by Pydantic — rejects malformed data at the boundary
-    # 3. Rate limited — prevents abuse and credential stuffing
-    # 4. Use parameterized queries — NEVER string concatenation for SQL
-    # 5. Return minimal data — no internal IDs, no stack traces
-    # 6. Log security events to audit trail (not to client response)
-    audit_log.info("user_created", actor=auth["sub"], target=user.username)
-    return {"status": "created", "username": user.username}
+func (r createUserRequest) validate() error {
+	if !usernameRe.MatchString(r.Username) {
+		return errors.New("username must be 3-30 alphanumeric characters")
+	}
+	if len(r.Email) == 0 || len(r.Email) > 254 {
+		return errors.New("invalid email length")
+	}
+	return nil
+}
+
+// requireAuth validates JWT signature, expiry, issuer, and audience.
+// Never accept alg=none or HS256 with a public key endpoint.
+func requireAuth(jwtPublicKey *rsa.PublicKey) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			token, err := jwt.Parse(raw, func(t *jwt.Token) (any, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+				}
+				return jwtPublicKey, nil
+			}, jwt.WithIssuer(config.JWTIssuer), jwt.WithAudience(config.JWTAudience))
+			if err != nil || !token.Valid {
+				writeError(w, http.StatusUnauthorized, "invalid credentials")
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(ctxWithClaims(r.Context(), token.Claims)))
+		})
+	}
+}
+
+func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+	// 1. Rate limiting — prevents credential stuffing and abuse
+	if !loginLimiter.Allow() {
+		writeError(w, http.StatusTooManyRequests, "too many requests")
+		return
+	}
+
+	// 2. Input validation — reject malformed data at the trust boundary
+	var req createUserRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<13)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := req.validate(); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	// 3. Business logic via use case (parameterized queries inside — no string concat for SQL)
+	user, err := h.usecase.CreateUser(r.Context(), usecase.CreateUserInput{
+		Username: req.Username,
+		Email:    req.Email,
+	})
+	if err != nil {
+		slog.Error("create user failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	// 4. Audit log — security events go to server log, not to client response
+	slog.Info("user_created", "actor", claimsFromCtx(r.Context()).Subject, "target", user.Username)
+
+	// 5. Return minimal data — no internal IDs, no stack traces
+	writeJSON(w, http.StatusCreated, map[string]string{"username": user.Username})
+}
 ```
 
 ### CI/CD Security Pipeline
